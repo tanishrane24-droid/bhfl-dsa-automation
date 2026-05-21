@@ -1,6 +1,7 @@
 """
 BHFL DSA AUTOMATION - Main Application
 One-click desktop automation for DSA mail distribution
+DEMO MODE ENABLED - Sample data ready for manager presentation
 """
 
 import sys
@@ -18,7 +19,12 @@ from queue import Queue
 import pandas as pd
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
-import win32com.client
+try:
+    import win32com.client
+    OUTLOOK_AVAILABLE = True
+except:
+    OUTLOOK_AVAILABLE = False
+
 from pathlib import Path
 import shutil
 import logging
@@ -30,9 +36,13 @@ OUTPUT_DIR = BASE_DIR / "Output"
 ARCHIVE_DIR = BASE_DIR / "Archive"
 LOG_DIR = BASE_DIR / "Logs"
 CONFIG_DIR = BASE_DIR / "config"
+DEMO_DIR = BASE_DIR / "Demo_Output"
+
+# DEMO MODE FLAG
+DEMO_MODE = True  # Set to False to send actual emails
 
 # Create directories
-for dir_path in [INPUT_DIR, OUTPUT_DIR, ARCHIVE_DIR, LOG_DIR, CONFIG_DIR]:
+for dir_path in [INPUT_DIR, OUTPUT_DIR, ARCHIVE_DIR, LOG_DIR, CONFIG_DIR, DEMO_DIR]:
     dir_path.mkdir(exist_ok=True)
 
 # Setup logging
@@ -54,7 +64,7 @@ class DSAAutomationApp:
     def __init__(self, root):
         self.root = root
         self.root.title("BHFL DSA AUTOMATION")
-        self.root.geometry("900x700")
+        self.root.geometry("900x750")
         self.root.resizable(False, False)
         
         # Set icon if available
@@ -71,6 +81,7 @@ class DSAAutomationApp:
         style.configure('Title.TLabel', font=('Arial', 16, 'bold'), foreground='#1F4788')
         style.configure('Subtitle.TLabel', font=('Arial', 11), foreground='#555')
         style.configure('Status.TLabel', font=('Courier', 9), foreground='#333')
+        style.configure('DemoMode.TLabel', font=('Arial', 9, 'bold'), foreground='#FF6B35')
         style.configure('Run.TButton', font=('Arial', 11, 'bold'), padding=15)
         style.configure('Small.TButton', font=('Arial', 9))
         
@@ -93,6 +104,9 @@ class DSAAutomationApp:
         ttk.Label(header_frame, text="BHFL DSA AUTOMATION", style='Title.TLabel').pack(anchor='w')
         ttk.Label(header_frame, text="One-click DSA Mail Distribution System", style='Subtitle.TLabel').pack(anchor='w')
         
+        if DEMO_MODE:
+            ttk.Label(header_frame, text="🔵 DEMO MODE - Sample Data Ready", style='DemoMode.TLabel').pack(anchor='w', pady=5)
+        
         # Status frame
         status_frame = ttk.LabelFrame(self.root, text="Status", padding=10)
         status_frame.pack(fill='x', padx=20, pady=10)
@@ -102,6 +116,10 @@ class DSAAutomationApp:
         
         self.mail_map_label = ttk.Label(status_frame, text="Mail Map: Not detected", style='Status.TLabel')
         self.mail_map_label.pack(anchor='w', pady=5)
+        
+        if DEMO_MODE:
+            demo_label = ttk.Label(status_frame, text="Mode: DEMO (No actual emails sent)", style='DemoMode.TLabel')
+            demo_label.pack(anchor='w', pady=5)
         
         # Progress frame
         progress_frame = ttk.LabelFrame(self.root, text="Progress", padding=10)
@@ -155,6 +173,7 @@ class DSAAutomationApp:
             else:
                 self.master_label.config(text="✗ Master File: Not found in Input folder")
                 self.log_console("✗ Master.xlsx not found in Input folder")
+                self.log_console("  Tip: Run 'python generate_demo_data.py' to create sample files")
             
             # Check for mail map
             mail_map_path = CONFIG_DIR / "DSA_MAIL_MAP.xlsx"
@@ -165,6 +184,7 @@ class DSAAutomationApp:
             else:
                 self.mail_map_label.config(text="✗ Mail Map: Not found in config folder")
                 self.log_console("✗ DSA_MAIL_MAP.xlsx not found in config folder")
+                self.log_console("  Tip: Run 'python generate_demo_data.py' to create sample files")
         
         except Exception as e:
             self.log_console(f"✗ Auto-detection error: {str(e)}")
@@ -180,7 +200,9 @@ class DSAAutomationApp:
             messagebox.showerror("Error", "Required files not detected!\n\n" +
                                "Please ensure:\n" +
                                "1. Input/Master.xlsx exists\n" +
-                               "2. config/DSA_MAIL_MAP.xlsx exists")
+                               "2. config/DSA_MAIL_MAP.xlsx exists\n\n" +
+                               "To generate sample files, run:\n" +
+                               "python generate_demo_data.py")
             return
         
         self.is_running = True
@@ -203,7 +225,10 @@ class DSAAutomationApp:
             }
             
             self.log_console("=" * 60)
-            self.log_console("STARTING AUTOMATION WORKFLOW")
+            if DEMO_MODE:
+                self.log_console("STARTING AUTOMATION WORKFLOW (DEMO MODE)")
+            else:
+                self.log_console("STARTING AUTOMATION WORKFLOW")
             self.log_console("=" * 60)
             
             # Step 1: Read Master file
@@ -219,7 +244,7 @@ class DSAAutomationApp:
             self.progress['value'] = 20
             self.log_console("\n[2/6] Identifying unique DSA names...")
             
-            dsa_names = master_df['DSA'].unique()
+            dsa_names = master_df['DSA Name'].unique()
             stats['total_dsa'] = len(dsa_names)
             self.log_console(f"✓ Detected {stats['total_dsa']} unique DSAs:")
             for dsa in dsa_names:
@@ -232,7 +257,7 @@ class DSAAutomationApp:
             
             dsa_files = {}
             for dsa in dsa_names:
-                dsa_df = master_df[master_df['DSA'] == dsa]
+                dsa_df = master_df[master_df['DSA Name'] == dsa]
                 file_name = f"{dsa.replace(' ', '_')}.xlsx"
                 file_path = OUTPUT_DIR / file_name
                 
@@ -246,16 +271,24 @@ class DSAAutomationApp:
             self.log_console("\n[4/6] Loading DSA mail map...")
             
             mail_map_df = pd.read_excel(self.dsa_mail_map)
-            mail_map = dict(zip(mail_map_df['DSA'], mail_map_df['Email']))
+            mail_map = dict(zip(mail_map_df['DSA Name'], mail_map_df['Mail ID']))
             self.log_console(f"✓ Loaded mail map for {len(mail_map)} DSAs")
             
             # Step 5: Create and send Outlook mails
             self.progress_label.config(text="Sending mails via Outlook...")
             self.progress['value'] = 50
-            self.log_console("\n[5/6] Sending Outlook mails with attachments...")
             
-            outlook = win32com.client.Dispatch('Outlook.Application')
+            if DEMO_MODE:
+                self.log_console("\n[5/6] DEMO MODE: Preparing mail preview files (NOT sending)...")
+            else:
+                self.log_console("\n[5/6] Sending Outlook mails with attachments...")
+            
             status_records = []
+            
+            if not DEMO_MODE and OUTLOOK_AVAILABLE:
+                outlook = win32com.client.Dispatch('Outlook.Application')
+            else:
+                outlook = None
             
             for dsa, file_path in dsa_files.items():
                 mail_sent = False
@@ -269,39 +302,84 @@ class DSAAutomationApp:
                         
                         recipient = mail_map[dsa]
                         
-                        # Create mail
-                        mail = outlook.CreateItem(0)
-                        mail.To = recipient
-                        mail.Subject = f"DSA Data Distribution - {dsa}"
-                        mail.Body = f"""
+                        if DEMO_MODE:
+                            # DEMO MODE: Create sample mail file instead of sending
+                            dsa_clean = dsa.lower().replace(' ', '_')
+                            mail_preview = f"""
+================================================================================
+MAIL PREVIEW - DEMO MODE
+================================================================================
+
+TO: {recipient}
+SUBJECT: DSA Data Distribution - {dsa}
+DATE: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+================================================================================
+
 Dear {dsa},
 
 Please find attached the data distribution file for your records.
 
 File: {file_path.name}
-Records: {len(master_df[master_df['DSA'] == dsa])}
+Records: {len(master_df[master_df['DSA Name'] == dsa])}
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 Best regards,
 BHFL DSA Automation System
-"""
+
+================================================================================
+NOTE: This is a DEMO MODE email. No actual mail was sent.
+================================================================================
+                            """
+                            
+                            demo_file = DEMO_DIR / f"Mail_{dsa_clean}.txt"
+                            with open(demo_file, 'w') as f:
+                                f.write(mail_preview)
+                            
+                            stats['mails_sent'] += 1
+                            mail_sent = True
+                            self.log_console(f"✓ Mail preview created for {dsa} ({recipient})")
+                            
+                            status_records.append({
+                                'Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                'DSA': dsa,
+                                'Mail': recipient,
+                                'Status': 'SUCCESS (DEMO)',
+                                'Remarks': 'Mail preview created (Demo Mode - not sent)'
+                            })
                         
-                        # Attach file
-                        mail.Attachments.Add(str(file_path))
-                        
-                        # Send
-                        mail.Send()
-                        
-                        stats['mails_sent'] += 1
-                        mail_sent = True
-                        self.log_console(f"✓ Mail sent to {dsa} ({recipient})")
-                        
-                        status_records.append({
-                            'Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'DSA': dsa,
-                            'Mail': recipient,
-                            'Status': 'SUCCESS',
-                            'Remarks': 'Mail sent successfully'
-                        })
+                        else:
+                            # PRODUCTION MODE: Send actual email
+                            if not outlook:
+                                raise Exception("Outlook not available. Please install Microsoft Outlook.")
+                            
+                            mail = outlook.CreateItem(0)
+                            mail.To = recipient
+                            mail.Subject = f"DSA Data Distribution - {dsa}"
+                            mail.Body = f"""Dear {dsa},
+
+Please find attached the data distribution file for your records.
+
+File: {file_path.name}
+Records: {len(master_df[master_df['DSA Name'] == dsa])}
+
+Best regards,
+BHFL DSA Automation System"""
+                            
+                            mail.Attachments.Add(str(file_path))
+                            mail.Send()
+                            
+                            stats['mails_sent'] += 1
+                            mail_sent = True
+                            self.log_console(f"✓ Mail sent to {dsa} ({recipient})")
+                            
+                            status_records.append({
+                                'Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                'DSA': dsa,
+                                'Mail': recipient,
+                                'Status': 'SUCCESS',
+                                'Remarks': 'Mail sent successfully'
+                            })
                     
                     except Exception as e:
                         retry_count += 1
@@ -311,7 +389,7 @@ BHFL DSA Automation System
                             stats['failed'] += 1
                             error_msg = str(e)
                             stats['errors'].append(f"{dsa}: {error_msg}")
-                            self.log_console(f"✗ Failed to send mail to {dsa}: {error_msg}")
+                            self.log_console(f"✗ Failed for {dsa}: {error_msg}")
                             
                             status_records.append({
                                 'Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -345,13 +423,19 @@ BHFL DSA Automation System
             self.progress_label.config(text="✓ COMPLETED")
             
             self.log_console("\n" + "=" * 60)
-            self.log_console("AUTOMATION COMPLETED SUCCESSFULLY")
+            if DEMO_MODE:
+                self.log_console("AUTOMATION COMPLETED (DEMO MODE)")
+            else:
+                self.log_console("AUTOMATION COMPLETED SUCCESSFULLY")
             self.log_console("=" * 60)
             self.log_console(f"\nSUMMARY DASHBOARD:")
             self.log_console(f"  Total DSAs:      {stats['total_dsa']}")
-            self.log_console(f"  Mails Sent:      {stats['mails_sent']}")
+            self.log_console(f"  Mails Processed: {stats['mails_sent']}")
             self.log_console(f"  Failed:          {stats['failed']}")
             self.log_console(f"  Success Rate:    {(stats['mails_sent']/stats['total_dsa']*100):.1f}%")
+            
+            if DEMO_MODE:
+                self.log_console(f"\n  📁 Demo mail previews saved to: Demo_Output/")
             
             if stats['errors']:
                 self.log_console(f"\nErrors encountered:")
@@ -361,11 +445,12 @@ BHFL DSA Automation System
             self.log_console("\n" + "=" * 60)
             
             # Show completion popup
+            mode_text = "DEMO MODE" if DEMO_MODE else ""
             self.root.after(0, lambda: messagebox.showinfo(
                 "SUCCESS",
-                f"AUTOMATION COMPLETED\n\n" +
+                f"AUTOMATION COMPLETED {mode_text}\n\n" +
                 f"Total DSAs: {stats['total_dsa']}\n" +
-                f"Mails Sent: {stats['mails_sent']}\n" +
+                f"Processed: {stats['mails_sent']}\n" +
                 f"Failed: {stats['failed']}\n" +
                 f"Success Rate: {(stats['mails_sent']/stats['total_dsa']*100):.1f}%"
             ))
@@ -392,14 +477,20 @@ BHFL DSA Automation System
         try:
             os.startfile(OUTPUT_DIR)
         except:
-            messagebox.showerror("Error", f"Could not open: {OUTPUT_DIR}")
+            try:
+                os.system(f'open "{OUTPUT_DIR}"')  # For Mac
+            except:
+                messagebox.showerror("Error", f"Could not open: {OUTPUT_DIR}")
     
     def view_logs(self):
         """View logs folder"""
         try:
             os.startfile(LOG_DIR)
         except:
-            messagebox.showerror("Error", f"Could not open: {LOG_DIR}")
+            try:
+                os.system(f'open "{LOG_DIR}"')  # For Mac
+            except:
+                messagebox.showerror("Error", f"Could not open: {LOG_DIR}")
     
     def start_log_monitor(self):
         """Monitor log queue"""
